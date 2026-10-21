@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nandaka"
+version = "1.0.0"
+description = "Offline-first, GGUF-agnostic academic content and exam-preparation workbench"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "NANDAKA Contributors" }]
+keywords = ["gguf", "llama.cpp", "exam-preparation", "ncert", "mcq", "telugu", "offline-first"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Education",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Education",
+]
+# Core install stays stdlib-only so it runs on Termux without a compiler.
+dependencies = []
+
+[project.optional-dependencies]
+# PDF text extraction (pure Python, no compiler needed on Termux)
+pdf = ["pypdf>=4.0"]
+# Full XLSX features (read support); writer is built-in and needs nothing)
+xlsx = ["openpyxl>=3.1"]
+# All optional features
+full = ["pypdf>=4.0", "openpyxl>=3.1"]
+# Development
+dev = ["pytest>=8.0", "pypdf>=4.0", "openpyxl>=3.1"]
+
+[project.scripts]
+nandaka = "nandaka.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/karun99/nandaka"
+Issues = "https://github.com/karun99/nandaka/issues"
+
+[tool.setuptools.packages.find]
+include = ["nandaka*"]
+# Every package carries an __init__.py, so require it: implicit-namespace
+# discovery would otherwise sweep stray dirs (e.g. __pycache__) into the wheel.
+namespaces = false
+exclude = ["tests*", "*__pycache__*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

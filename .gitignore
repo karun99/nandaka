@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Test / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# NANDAKA runtime output (resolved under NANDAKA_DIR at run time)
+nandaka-out/
+*.gguf
+
+# Local secrets & caches — never commit
+.env
+*.key
+cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local fonts dropped for Telugu PDF embedding (see nandaka/assets/fonts/README.md)
+nandaka/assets/fonts/*.ttf
+nandaka/assets/fonts/*.otf
+!nandaka/assets/fonts/README.md

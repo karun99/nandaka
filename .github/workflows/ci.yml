@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          # ARM runner approximates Termux's aarch64 environment
+          - os: ubuntu-24.04-arm
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install (core, stdlib-only)
+        run: python -m pip install .
+
+      - name: Install dev extras
+        run: python -m pip install ".[dev]"
+
+      - name: Run test suite (fully offline)
+        run: python -m pytest tests/ -q
+
+      - name: CLI smoke test
+        env:
+          NANDAKA_DIR: ${{ runner.temp }}/nandaka-ci
+        run: |
+          nandaka --version
+          nandaka init
+          nandaka doctor
+          nandaka config
+          nandaka sources list
+          nandaka negative --R 1 --W 0.33 --U 0 --p 0.6
+
+  lint:
+    name: packaging + secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Check the package installs and imports cleanly
+        run: |
+          python -m pip install dist/*.whl
+          python -c "import nandaka; print(nandaka.__version__)"
+
+      - name: No cloud credentials or model files committed
+        run: |
+          set -e
+          if git ls-files | grep -E '\.(gguf|safetensors|key|pem)$'; then
+            echo "binary model/secret files must not be committed" >&2; exit 1
+          fi
+          if git grep -nE '(nvapi-[A-Za-z0-9]{8,}|sk-or-[A-Za-z0-9]{8,})'; then
+            echo "API key pattern found in the tree" >&2; exit 1
+          fi
+          echo "clean"
