@@ -21,6 +21,21 @@ from .client import ChatClient, ChatError
 from .gguf import classify_tier
 from .registry import ModelRegistry
 
+def _termux_candidate(environ: dict | None = None,
+                      termux: bool | None = None) -> str | None:
+    """Where ``pkg install llama.cpp`` puts the server binary (docs/termux.md).
+
+    Termux lives under ``$PREFIX``; anywhere else there is no such place, so
+    this returns None and no Termux path enters the search list.
+    """
+    env = os.environ if environ is None else environ
+    if termux is None:
+        termux = is_termux()
+    if not termux:
+        return None
+    return f"{env.get('PREFIX', '/data/data/com.termux/files/usr')}/bin/llama-server"
+
+
 _SERVER_CANDIDATES = [
     "llama-server",
     "/usr/local/bin/llama-server",
@@ -28,8 +43,9 @@ _SERVER_CANDIDATES = [
     "/opt/llama.cpp/build/bin/llama-server",
     str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"),
 ]
-if is_termux():  # Termux package: pkg install llama.cpp
-    _SERVER_CANDIDATES = [f"{os.environ.get('PREFIX', '/data/data/com.termux/files/usr')}/bin/llama-server"] + _SERVER_CANDIDATES
+_termux_bin = _termux_candidate()  # searched first, so a Termux build wins
+if _termux_bin:
+    _SERVER_CANDIDATES = [_termux_bin] + _SERVER_CANDIDATES
 
 PROBE_PROMPTS = [
     ("factual", "What is the capital of France? Answer in one short sentence."),

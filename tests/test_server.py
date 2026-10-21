@@ -144,12 +144,43 @@ def test_find_server_binary_env_missing_is_falsy(nandaka_home, monkeypatch):
         find_server_binary(nandaka_home).endswith("llama-server")
 
 
-def test_termux_candidate_prefers_prefix(nandaka_home, monkeypatch):
-    """On Termux the PREFIX bin dir is searched first (docs/termux.md)."""
-    monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
+def test_termux_candidate_is_platform_specific():
+    """The Termux prefix applies only on Termux (docs/termux.md)."""
     from nandaka.models import server as srv
-    assert srv._SERVER_CANDIDATES[0].startswith(
-        "/data/data/com.termux/files/usr/bin")
+    prefix = "/data/data/com.termux/files/usr"
+
+    assert srv._termux_candidate({"PREFIX": prefix}, termux=True) == \
+        f"{prefix}/bin/llama-server"
+    # a Termux host without PREFIX still resolves the standard prefix
+    assert srv._termux_candidate({}, termux=True) == \
+        f"{prefix}/bin/llama-server"
+    # anywhere else no Termux path is offered at all
+    assert srv._termux_candidate({"PREFIX": prefix}, termux=False) is None
+
+
+def test_search_order_matches_this_platform(nandaka_home):
+    """On this platform the list opens with that platform's own candidate.
+
+    The Termux entry is chosen at import time from ``is_termux()``, so the
+    assertion is written for both worlds rather than for one host.
+    """
+    from nandaka.config import is_termux
+    from nandaka.models import server as srv
+    if is_termux():
+        prefix = os.environ.get("PREFIX",
+                                "/data/data/com.termux/files/usr")
+        assert srv._SERVER_CANDIDATES[0] == f"{prefix}/bin/llama-server"
+    else:
+        assert srv._SERVER_CANDIDATES[0] == "llama-server"
+
+
+def test_configured_bin_is_searched_first(nandaka_home, tmp_path):
+    """cfg.llama_server_bin outranks every hard-coded location (FR-IN-06)."""
+    fake = tmp_path / "llama-server"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    nandaka_home.llama_server_bin = str(fake)
+    assert find_server_binary(nandaka_home) == str(fake)
 
 
 # --------------------------------------------------------------------------- #
