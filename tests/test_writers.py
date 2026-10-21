@@ -94,12 +94,36 @@ def test_pdf_valid_structure(tmp_path):
     assert info["pages"] >= 1
 
 
-def test_pdf_telugu_without_font_is_disclosed(tmp_path):
-    """No silent data loss: missing Telugu coverage must be reported."""
-    info = markdown_to_pdf("# అధ్యాయం\n\nతెలుగు వాక్యం ఇక్కడ ఉంది.", tmp_path / "te.pdf")
+def test_pdf_telugu_without_font_is_disclosed(tmp_path, monkeypatch):
+    """No silent data loss: uncovered non-Latin text must be disclosed.
+
+    Hermetic — the font search is stubbed empty so this asserts the contract
+    regardless of which fonts the host happens to have installed.
+    """
+    import nandaka.output.pdfwriter as pw
+    monkeypatch.setattr(pw, "_font_search_paths", lambda: [])
+    monkeypatch.delenv("NANDAKA_FONT", raising=False)
+
+    info = markdown_to_pdf("# అధ్యాయం\n\nతెలుగు వాక్యం ఇక్కడ ఉంది.",
+                           tmp_path / "te.pdf")
     assert info["path"]
-    if "telugu" not in info["font"].lower():
-        assert any("Telugu" in w for w in info["warnings"]), info["warnings"]
+    assert info["font"] == "Helvetica (built-in)"   # nothing embedded
+    assert any("no covering TTF" in w for w in info["warnings"]), info["warnings"]
+    # the file is still produced and structurally valid — degraded, not broken
+    v = validate_output(info["path"], "pdf")
+    assert v["ok"], v
+
+
+def test_pdf_latin_only_never_warns_about_fonts(tmp_path, monkeypatch):
+    """The disclosure fires only when it is true (no false alarms)."""
+    import nandaka.output.pdfwriter as pw
+    monkeypatch.setattr(pw, "_font_search_paths", lambda: [])
+    monkeypatch.delenv("NANDAKA_FONT", raising=False)
+
+    info = markdown_to_pdf("# Chapter One\n\nLatin only text here.",
+                           tmp_path / "en.pdf")
+    assert info["font"] == "Helvetica (built-in)"
+    assert not any("covering TTF" in w for w in info["warnings"]), info["warnings"]
 
 
 def test_write_output_dispatch(tmp_path):
