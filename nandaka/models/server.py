@@ -266,11 +266,16 @@ class ModelManager:
                 })
         except ChatError as exc:
             results.append({"kind": "error", "error": str(exc)})
+        # Success requires every configured probe to have answered non-empty;
+        # a vacuous all() over an empty list would call a dead backend "ok".
+        probes = [r for r in results
+                  if r.get("kind") in {k for k, _ in PROBE_PROMPTS}]
         outcome = {
             "time": time.time(),
             "tier": entry.get("tier"),
             "results": results,
-            "ok": all(r.get("non_empty") for r in results if "kind" in r and r["kind"] != "error"),
+            "ok": len(probes) == len(PROBE_PROMPTS)
+                  and all(r.get("non_empty") for r in probes),
         }
         self.registry.record_probe(path, outcome)
         return outcome

@@ -12,6 +12,7 @@ URLs. Rules enforced here:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import urllib.error
 import urllib.request
@@ -95,11 +96,109 @@ def _cache_path(cache_dir: Path, url: str) -> Path:
     return cache_dir / "web" / h[:2] / h
 
 
+def _read_meta(path: Path) -> dict:
+    """Validator recorded when the partial was written (ETag / total size)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember_remote(path: Path, remote: dict) -> None:
+    try:
+        path.write_text(json.dumps(remote, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass                                  # resume stays possible, just unverified
+
+
+def _resume_verdict(resp, meta: dict) -> tuple[bool, str]:
+    """Is it safe to splice our stored prefix onto this response?
+
+    Returns ``(safe, reason_if_not)``. Checked before a single body byte is
+    read, so a rejected resume costs one connection and never a wrong file.
+    """
+    if getattr(resp, "status", None) != 206:
+        return False, "server did not honour the Range request"
+    total = _content_length(resp)
+    if total is None:
+        return False, "server did not state the file length"
+    expected = meta.get("total")
+    if expected is None:
+        return False, "no length on record for the partial file"
+    if total != expected:
+        return False, f"remote length changed ({expected} -> {total})"
+    return True, ""
+
+
+def _open_resumable(url: str, headers: dict, start: int, meta: dict,
+                    ppath: Path, res: FetchResult, timeout: float):
+    """Open the response, resuming only when the resume is provably safe.
+
+    Returns ``(response, resumed, prefix_bytes)``. On any doubt it re-opens a
+    plain full request, so the caller always receives a whole file.
+    """
+    def opener():
+        return urllib.request.urlopen(
+            urllib.request.Request(url, headers=headers), timeout=timeout)
+
+    def full():
+        headers.pop("Range", None)
+        headers.pop("If-Range", None)
+        return opener()
+
+    if not start:
+        return opener(), False, b""
+    try:
+        resp = opener()
+    except urllib.error.HTTPError as exc:
+        if exc.code != 416:
+            raise
+        # Our partial runs past the end of the remote file: it cannot belong
+        # to it (file replaced or re-generated since the interrupted pull).
+        res.notes.append(
+            f"partial file of {start} bytes out of range (HTTP 416); "
+            "re-downloading in full")
+        return full(), False, b""
+
+    verdict, reason = _resume_verdict(resp, meta)
+    prefix = b""
+    if verdict:
+        try:
+            prefix = ppath.read_bytes()
+        except OSError:
+            verdict, reason = False, "partial file disappeared"
+    if verdict:
+        return resp, True, prefix
+    res.notes.append(
+        f"partial file of {start} bytes discarded: {reason}; "
+        "re-downloading in full")
+    resp.close()
+    return full(), False, b""
+
+
+def _keep_partial(ppath: Path, mpath: Path, data: bytes, remote: dict) -> None:
+    """Stash bytes already received so the next run resumes instead of
+    starting over (FR-IN-05). The validator travels with them, which is what
+    makes the resume provable rather than hopeful."""
+    ppath.write_bytes(data)
+    _remember_remote(mpath, remote)
+
+
 def fetch_url(url: str, cfg, *, allow_network: bool = True,
               use_cache: bool = True, max_bytes: int = 64 << 20) -> FetchResult:
-    """FR-IN-04: prefer cache; FR-IN-05: Range header, single connection."""
+    """FR-IN-04: prefer cache; FR-IN-05: resume partial downloads, 1 connection.
+
+    Complete downloads live at *cpath* and are served without touching the
+    network. Interrupted ones live at a sibling ``.part`` path, so a partial
+    file can never be mistaken for a finished one — and a download cut off by
+    ``max_bytes`` is never promoted into the cache (it would otherwise be
+    served as a valid, silently-short document for the rest of time).
+    """
     res = FetchResult(url=url, ok=False)
     cpath = _cache_path(Path(cfg.cache_dir), url)
+    ppath = cpath.with_name(cpath.name + ".part")
+    mpath = cpath.with_name(cpath.name + ".part.meta")
 
     if use_cache and cpath.exists():
         try:
@@ -121,27 +220,71 @@ def fetch_url(url: str, cfg, *, allow_network: bool = True,
         return res
 
     headers = {"User-Agent": cfg.user_agent, "Accept": "*/*"}
-    start = cpath.stat().st_size if cpath.exists() else 0
+    start = 0
+    meta: dict = {}
+    if ppath.exists():
+        try:
+            start = ppath.stat().st_size          # resume an interrupted pull
+        except OSError:
+            start = 0
+        meta = _read_meta(mpath)
     if start:
         headers["Range"] = f"bytes={start}-"  # resume partial downloads
+        # If-Range lets the server answer 200 (whole file) instead of splicing
+        # a tail onto a prefix that no longer belongs to it.
+        validator = meta.get("etag") or meta.get("last_modified")
+        if validator:
+            headers["If-Range"] = validator
 
     req = urllib.request.Request(url, headers=headers)
+    remote: dict = {}
     try:
-        with urllib.request.urlopen(req, timeout=cfg.download_timeout_s) as resp:
-            chunks: list[bytes] = [res.data] if start else []
-            total = start
-            while True:
-                chunk = resp.read(64 << 10)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total += len(chunk)
-                if total > max_bytes:
-                    res.notes.append("response truncated at size limit")
-                    break
+        resp, resumed, prefix = _open_resumable(url, headers, start, meta,
+                                                ppath, res, cfg.download_timeout_s)
+        with resp:
+            remote = {
+                "total": _content_length(resp),
+                "etag": resp.headers.get("ETag"),
+                "last_modified": resp.headers.get("Last-Modified"),
+            }
+            chunks: list[bytes] = [prefix] if prefix else []
+            total = sum(len(c) for c in chunks)
+            dropped: Exception | None = None
+            try:
+                while True:
+                    chunk = resp.read(64 << 10)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > max_bytes:
+                        res.notes.append("response truncated at size limit")
+                        break
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                # Connection lost mid-transfer: keep what arrived rather than
+                # throwing it away — this is the case resume exists for.
+                dropped = exc
             res.data = b"".join(chunks)
             res.text = _decode(res.data)
-            res.ok, res.status = True, "fetched"
+            if dropped is not None:
+                res.status = "network-error"
+                res.notes.append(
+                    f"connection lost after {len(res.data)} bytes: "
+                    f"{type(dropped).__name__}")
+                _keep_partial(ppath, mpath, res.data, remote)
+                res.notes.append(
+                    "bytes received are kept as a resumable partial (re-run "
+                    "to continue)")
+            else:
+                res.ok, res.status = True, "resumed" if resumed else "fetched"
+                # Integrity check on the assembled file, so a bad splice is
+                # never cached as if it were whole (FR-OUT-03).
+                expected = remote.get("total")
+                if expected is not None and len(res.data) != expected and \
+                        not any("truncated" in n for n in res.notes):
+                    res.notes.append(
+                        f"size mismatch after fetch: got {len(res.data)} "
+                        f"bytes, server reports {expected}")
     except urllib.error.HTTPError as exc:
         res.status = f"HTTP {exc.code}"
         res.notes.append(f"{url}: HTTP {exc.code}")
@@ -150,13 +293,28 @@ def fetch_url(url: str, cfg, *, allow_network: bool = True,
         res.notes.append(f"{url}: {type(exc).__name__} (offline-first: continuing)")
 
     if res.ok:
+        # Promote to the cache only when the file is complete and verified.
+        # A truncated or short download stays a .part so the next run resumes
+        # it, rather than being served as a valid document forever after.
+        truncated = any("truncated" in n for n in res.notes)
+        mismatch = any("size mismatch" in n for n in res.notes)
+        complete = not truncated and not mismatch
         try:
             cpath.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cpath.with_suffix(".part")
-            tmp.write_bytes(res.data)
-            tmp.replace(cpath)
-        except OSError:
-            pass
+            if complete:
+                tmp = cpath.with_suffix(".tmp")
+                tmp.write_bytes(res.data)
+                tmp.replace(cpath)              # atomic: no half-written cache
+                ppath.unlink(missing_ok=True)   # resume state no longer needed
+                mpath.unlink(missing_ok=True)
+            else:
+                _keep_partial(ppath, mpath, res.data, remote)
+                res.ok = False
+                res.notes.append(
+                    "download incomplete; kept as a resumable partial and NOT "
+                    "cached (re-run to resume)")
+        except OSError as exc:
+            res.notes.append(f"cache write failed: {exc}")
     return res
 
 
@@ -167,6 +325,24 @@ def _decode(data: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="replace")
+
+
+def _content_length(resp) -> int | None:
+    """Total size of the remote file when the server states it.
+
+    For 206 responses that is the total from Content-Range's "/<total>" part;
+    for 200 responses it is the ordinary Content-Length. Absent or unparseable
+    headers yield None, meaning "cannot verify".
+    """
+    crange = resp.headers.get("Content-Range", "")
+    if "/" in crange:
+        tail = crange.rsplit("/", 1)[1].strip()
+        if tail.isdigit():
+            return int(tail)
+    length = resp.headers.get("Content-Length")
+    if length and str(length).isdigit():
+        return int(length)
+    return None
 
 
 # --------------------------------------------------------------------------- #

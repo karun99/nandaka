@@ -108,8 +108,8 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | FR-IN-01 | Read `.md`, `.txt`, `.pdf`, `.csv`, `.xlsx`, `.png/.jpg/.svg` | `test_ingest` |
 | FR-IN-02 | Produce a source inventory (path, kind, chars, pages, tables, notes) | `test_ingest`, `test_cli` |
 | FR-IN-03 | Portal connectors for NCERT, DIKSHA, AP SCERT, TG SCERT, YesOnlineBooks | `test_cli sources` |
-| FR-IN-04 | Cache-first: cached content wins over the network | `test_cli sources --offline` |
-| FR-IN-05 | Resumable, serial downloads (Range, `max_concurrent_downloads=1`) | — |
+| FR-IN-04 | Cache-first: cached content wins over the network | `test_cli sources --offline`, `test_server` |
+| FR-IN-05 | Resumable, serial downloads (Range, `max_concurrent_downloads=1`) | `test_server` — resume, changed/shrunk remote, 416, no-validator fallback, truncation never cached |
 | FR-IN-06 | Missing input or failed fetch is reported as a gap and the run continues | `test_ingest`, `test_cli` |
 | FR-IN-07 | CSV/XLSX readers support both shared strings and inline strings | `test_ingest` |
 
@@ -121,11 +121,11 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | FR-GGUF-03 | Read architecture, parameters, quant, context length, chat template | `test_gguf` |
 | FR-GGUF-04 | Classify tiers: **T0 ≤ 0.6B**, **T1 0.6–2B** (low exclusive), **T2 2–8B**, **T3 > 8B** | `test_gguf` |
 | FR-GGUF-05 | Derive `n_ctx` from the RAM budget (NFR-D-03) | `test_config` |
-| FR-GGUF-06 | Reuse a warm server already hosting the requested model | — |
-| FR-GGUF-09 | Capability probe (factual / reasoning / instruction) with per-item results | `test_cli models probe` |
+| FR-GGUF-06 | Reuse a warm server already hosting the requested model | `test_server` |
+| FR-GGUF-09 | Capability probe (factual / reasoning / instruction) with per-item results | `test_cli models probe`, `test_server` |
 | FR-GGUF-11 | Capability gate: `ok / partial / basic / off` per feature × tier; `off` refuses unless `--force`; `basic` forces human review | `test_registry` |
 | FR-GGUF-12 | Integrity verification (magic, header, tensors, SHA-256) | `test_registry` |
-| FR-GGUF-13 | Ollama backend via the same OpenAI dialect on `:11434` | `test_config` |
+| FR-GGUF-13 | Ollama backend via the same OpenAI dialect on `:11434` | `test_config`, `test_server` |
 | FR-GGUF-14 | Registry persists at `registry.json` (mode 0600) and drops stale entries | `test_registry` |
 
 **Feature matrix (§3.3.1.1):** `short_summary`, `short_draft`, `long_draft`,
@@ -133,11 +133,11 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 
 ### 3.3 Local execution (EX-10, NFR-P-*)
 
-| ID | Requirement |
-| --- | --- |
-| EX-10 | One `llama-server` process serves one model; swapping unloads then reloads so peak RAM never exceeds the budget |
-| NFR-P-07 | Model swap target ≤ 5 s; overruns are noted, never fatal |
-| NFR-P-08 | Best-effort RSS reporting of the loaded process |
+| ID | Requirement | Tests |
+| --- | --- | --- |
+| EX-10 | One `llama-server` process serves one model; swapping unloads then reloads so peak RAM never exceeds the budget | `test_server` |
+| NFR-P-07 | Model swap target ≤ 5 s; overruns are noted, never fatal | `test_server` (swap reports elapsed time) |
+| NFR-P-08 | Best-effort RSS reporting of the loaded process | `test_server` (`ram_report`) |
 
 ### 3.4 Historical analysis (FR-HA-*)
 
@@ -314,10 +314,10 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | Level | Location | Notes |
 | --- | --- | --- |
 | Unit | `tests/test_config`, `test_gguf`, `test_registry`, `test_analysis`, `test_ssj`, `test_validation`, `test_drafting`, `test_writers`, `test_images`, `test_ingest` | no network, no model |
-| Integration | `tests/test_pipeline`, `test_report`, `test_cloud`, `test_cli` | local `http.server` stub for cloud; fake backend for the pipeline |
+| Integration | `tests/test_pipeline`, `test_report`, `test_cloud`, `test_cli`, `test_server` | local `http.server` stubs for cloud, llama-server and file downloads; fake backend for the pipeline |
 | System / CI | `.github/workflows/ci.yml` | py3.10–3.13 + ARM runner, wheel build, secret scan |
 
-Suite status at baseline: **147 passed**, fully offline.
+Suite status: **177 passed**, fully offline (no network, no model weights).
 
 ---
 
@@ -325,8 +325,8 @@ Suite status at baseline: **147 passed**, fully offline.
 
 | Requirement group | Implemented in | Verified by |
 | --- | --- | --- |
-| FR-IN-* | `nandaka/ingest`, `nandaka/sources` | `test_ingest`, `test_cli` |
-| FR-GGUF-*, EX-10 | `nandaka/models/{gguf,registry,server}` | `test_gguf`, `test_registry`, `test_cli` |
+| FR-IN-* | `nandaka/ingest`, `nandaka/sources` | `test_ingest`, `test_cli`, `test_server` |
+| FR-GGUF-*, EX-10, NFR-P-07/08 | `nandaka/models/{gguf,registry,server}` | `test_gguf`, `test_registry`, `test_cli`, `test_server` |
 | FR-HA-*, FR-NM-* | `nandaka/analysis` | `test_analysis`, `test_cli` |
 | FR-GOV-*, FR-SB, FR-AB | `nandaka/drafting` | `test_drafting`, `test_pipeline` |
 | IR-* | `nandaka/images` | `test_images` |

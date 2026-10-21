@@ -144,7 +144,7 @@ Behaviour (FR-CLOUD-01..06):
 ## Testing
 
 ```bash
-python3 -m pytest tests/            # 147 tests, fully offline
+python3 -m pytest tests/            # 177 tests, fully offline
 ```
 
 The suite needs no network and no model: cloud behaviour is tested against a
