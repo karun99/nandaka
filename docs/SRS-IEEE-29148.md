@@ -317,7 +317,7 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | Integration | `tests/test_pipeline`, `test_report`, `test_cloud`, `test_cli`, `test_server` | local `http.server` stubs for cloud, llama-server and file downloads; fake backend for the pipeline |
 | System / CI | `.github/workflows/ci.yml` | py3.10–3.13 + ARM runner, wheel build, secret scan |
 
-Suite status: **177 passed**, fully offline (no network, no model weights).
+Suite status: **179 passed**, fully offline (no network, no model weights).
 
 ---
 
