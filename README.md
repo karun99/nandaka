@@ -64,6 +64,17 @@ If `pkg install llama.cpp` is unavailable on your Termux build, install a
 prebuilt `llama-server` or set `NANDAKA_LLAMA_SERVER=/path/to/llama-server`.
 `nandaka doctor` tells you exactly what is missing.
 
+Prefer Ollama (models as tags, no `.gguf` files)? Set the backend purely
+through config — Termux ships no Ollama package, so the endpoint is a machine
+on your LAN or a `proot-distro` instance:
+
+```bash
+export NANDAKA_BACKEND=ollama
+export NANDAKA_OLLAMA_HOST=http://192.168.1.24:11434
+nandaka doctor                 # probes the endpoint only when selected
+nandaka mcq --model llama3.2:1b --topic "Constitution" --count 10
+```
+
 More detail: [`docs/termux.md`](docs/termux.md) ·
 [`scripts/install-termux.sh`](scripts/install-termux.sh)
 
@@ -117,6 +128,7 @@ Outputs land in `$NANDAKA_DIR/nandaka-out/batch-*/`:
 | `NANDAKA_RAM_BUDGET_MB`, `NANDAKA_N_CTX` | CO-01 RAM budget → auto `n_ctx` |
 | `NANDAKA_LLAMA_SERVER` | path to `llama-server` binary |
 | `NANDAKA_BACKEND` | `llama_cpp` \| `ollama` (FR-GGUF-13) |
+| `NANDAKA_OLLAMA_HOST` | Ollama endpoint when `NANDAKA_BACKEND=ollama` |
 | `NANDAKA_CLOUD` | `1` enables cloud fallback (default: off) |
 | `NVIDIA_API_KEY`, `OPENROUTER_API_KEY` | provider credentials |
 | `NANDAKA_CLOUD_PROVIDER` | `nvidia` \| `openrouter` |
