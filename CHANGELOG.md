@@ -4,6 +4,43 @@ All notable changes to NANDAKA are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+**Termux via Ollama configuration (FR-GGUF-13)** — the Ollama backend can now
+be selected and pointed at a host entirely through configuration, with no
+code changes:
+
+- `NANDAKA_OLLAMA_HOST` joins `NANDAKA_BACKEND` as an environment override
+  (env wins over `config.toml`), so a phone can aim at an Ollama instance on
+  the LAN or inside `proot-distro` without editing any file.
+- `Config.using_ollama()` — one spelling-tolerant predicate used by every call
+  site instead of comparing the raw string.
+- `probe_ollama()` — best-effort reachability check that reports the tags the
+  endpoint holds and degrades instead of raising when the host is down.
+- `nandaka init` writes `ollama_host` into the generated `config.toml` and, on
+  the Ollama backend, replaces the "install llama.cpp" advice with the
+  endpoint it will use.
+- `nandaka doctor` gains an `ollama` block (`host`, `in_use`, `reachable`,
+  `models`, `reason`). The endpoint is probed **only when the backend is
+  selected**, so doctor stays offline by default. With Ollama in use,
+  `offline_ready` reflects the endpoint answering and `llama_server` reports
+  `"not used (backend = ollama)"`.
+- `scripts/install-termux.sh` accepts `NANDAKA_BACKEND=ollama`, skips the
+  `llama.cpp` install, resolves the host from `NANDAKA_OLLAMA_HOST` or
+  `OLLAMA_HOST`, and prints honest guidance — Termux has no official Ollama
+  package, so the endpoint must live on a LAN machine or in `proot-distro`.
+  Next steps adapt to pulling an Ollama tag instead of dropping a `.gguf`.
+- `--model` help text now names the Ollama case, since it takes a tag on this
+  backend.
+- `docs/termux.md` §9 documents the backend comparison, the three ways to
+  configure it, verification and troubleshooting rows.
+
+Verified by 12 new tests (config precedence, `doctor` against a live local
+stub and a refused endpoint, `init` output, `probe_ollama`) plus an
+end-to-end smoke of `init` → `doctor` against a stub endpoint.
+
 ## [1.0.0] — 2026-10-21
 
 First release. Offline-first academic content and exam-preparation workbench,

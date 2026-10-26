@@ -62,6 +62,8 @@ def nandaka_home(tmp_path, monkeypatch):
     home = tmp_path / "nandaka-home"
     monkeypatch.setenv("NANDAKA_DIR", str(home))
     monkeypatch.delenv("NANDAKA_MODEL_DIR", raising=False)
+    monkeypatch.delenv("NANDAKA_BACKEND", raising=False)
+    monkeypatch.delenv("NANDAKA_OLLAMA_HOST", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("NANDAKA_CLOUD", raising=False)

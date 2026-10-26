@@ -27,6 +27,9 @@ cmake --build build -j`) or point Nandaka at a binary you trust:
 export NANDAKA_LLAMA_SERVER=/path/to/llama-server
 ```
 
+Prefer Ollama? It needs no `.gguf` files and no `llama-server`, but Termux has
+no official Ollama package — see [§9](#9-using-ollama-instead-of-llama-cpp-fr-gguf-13).
+
 `pkg install llama-cpp-python` is **not** required — Nandaka talks to
 llama-server over its OpenAI-compatible HTTP dialect, not through Python
 bindings.
@@ -145,12 +148,74 @@ automatically; Latin text uses built-in Helvetica. See
 [`../nandaka/assets/fonts/README.md`](../nandaka/assets/fonts/README.md) for
 the search order and the disclosure warning when no font covers the script.
 
+## 9. Using Ollama instead of llama.cpp (FR-GGUF-13)
+
+Nandaka speaks the same OpenAI-compatible dialect to both backends, so
+switching is configuration, not code:
+
+| | `llama_cpp` (default) | `ollama` |
+| --- | --- | --- |
+| Weights live in | `$NANDAKA_DIR/models/*.gguf` | Ollama's own tag store |
+| Process started by Nandaka | yes (`llama-server`) | no — Ollama runs itself |
+| `--model` argument | path to a `.gguf` | an Ollama tag, e.g. `llama3.2:1b` |
+| On a phone | runs on-device | usually a machine on the LAN |
+
+**Termux ships no official Ollama package.** The endpoint therefore has to
+live somewhere else, and Nandaka just points at it:
+
+- **A PC on the same LAN** — run `ollama serve` there (it binds `0.0.0.0:11434`
+  when configured to), then export the PC's address.
+- **Inside proot-distro** — `pkg install proot-distro && proot-distro install
+  ubuntu`, then install Ollama in the distro and point at its port.
+
+### Configure it
+
+Any one of these is enough; env vars win over `config.toml`:
+
+```bash
+# 1) environment (simplest on Termux — put it in ~/.bashrc)
+export NANDAKA_BACKEND=ollama
+export NANDAKA_OLLAMA_HOST=http://192.168.1.24:11434
+
+# 2) or config.toml, written by `nandaka init`
+backend = "ollama"
+ollama_host = "http://192.168.1.24:11434"
+
+# 3) or bake it in during install
+NANDAKA_BACKEND=ollama NANDAKA_OLLAMA_HOST=http://192.168.1.24:11434 \
+  bash scripts/install-termux.sh
+```
+
+### Verify and run
+
+```bash
+nandaka doctor    # "ollama": {"host": ..., "reachable": true, "models": [...]}
+nandaka mcq --model llama3.2:1b --topic "Constitution" --count 10
+```
+
+`doctor` probes the endpoint **only when the backend is selected**, so it stays
+offline by default. With Ollama in use it also reports the tags the endpoint
+holds, and `offline_ready` reflects the endpoint answering rather than a local
+`llama-server` binary.
+
+Notes:
+
+- No `.gguf` file is needed on the phone, and `nandaka models scan` (which
+  scans a local GGUF directory) is not part of this path.
+- SSJ guardrails, validation, the human review queue and every output format
+  behave identically — the backend only changes where completions come from.
+- Cloud fallback (NVIDIA NIM / OpenRouter) is a separate, still opt-in switch.
+  Ollama on your LAN is local inference, not a cloud call, so `--cloud` stays
+  off.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
 | `nandaka: command not found` | `pip install --force-reinstall .`, or `python3 -m nandaka.cli` |
-| `llama-server binary not found` | `pkg install llama.cpp` or set `NANDAKA_LLAMA_SERVER` |
+| `llama-server binary not found` | `pkg install llama.cpp` or set `NANDAKA_LLAMA_SERVER` — or switch to the Ollama backend (§9) |
+| `ollama` shows `reachable: false` | Termux has no Ollama package: run `ollama serve` on a LAN PC or inside proot-distro, then fix `NANDAKA_OLLAMA_HOST` |
+| `no GGUF model selected` while using Ollama | this backend takes tags, not files: pass `--model llama3.2:1b` |
 | `no GGUF model selected` | put exactly one `.gguf` in `models/`, or pass `--model` |
 | PDF shows placeholder glyphs | install a covering TTF or set `NANDAKA_FONT` |
 | cloud says "no API key" | export the key *and* `NANDAKA_CLOUD=1`, or drop `--cloud` |

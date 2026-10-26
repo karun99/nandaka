@@ -96,6 +96,10 @@ ram_budget_mb = {cfg.ram_budget_mb}          # CO-01: peak RSS budget
 backend = "{cfg.backend}"          # llama_cpp | ollama (FR-GGUF-13)
 llama_server_bin = "{cfg.llama_server_bin}"
 llama_server_port = {cfg.llama_server_port}
+# Ollama endpoint, used when backend = "ollama". Termux ships no Ollama
+# package: point this at a machine that runs one (LAN PC, proot-distro).
+# Overridable without editing this file: export NANDAKA_OLLAMA_HOST=...
+ollama_host = "{cfg.ollama_host}"
 temperature = {cfg.temperature}
 seed = {cfg.seed}
 
@@ -110,18 +114,26 @@ cloud_token_budget = {cfg.cloud_token_budget}
     print(f"[nandaka] model dir : {cfg.model_dir}")
     print(f"[nandaka] work dir  : {cfg.work_dir}")
     print(f"[nandaka] termux    : {is_termux()}")
-    print("[nandaka] next: drop a .gguf into the model dir, then run "
-          "`nandaka models scan`")
-    if shutil.which("llama-server") is None:
-        print("[nandaka] note: llama-server not on PATH. Install llama.cpp "
-              "(Termux: `pkg install llama.cpp`; Linux: build from source) "
-              "or set NANDAKA_LLAMA_SERVER.")
+    if cfg.using_ollama():
+        print(f"[nandaka] backend     : ollama @ {cfg.ollama_host}")
+        print("[nandaka] note: the ollama backend needs no llama-server "
+              "binary; the endpoint holds the weights (FR-GGUF-13).")
+        print("[nandaka] next: pull a model on the ollama host "
+              "(`ollama pull llama3.2:1b`), then run `nandaka doctor` and "
+              "`nandaka mcq --model llama3.2:1b`")
+    else:
+        if shutil.which("llama-server") is None:
+            print("[nandaka] note: llama-server not on PATH. Install llama.cpp "
+                  "(Termux: `pkg install llama.cpp`; Linux: build from source) "
+                  "or set NANDAKA_LLAMA_SERVER.")
+        print("[nandaka] next: drop a .gguf into the model dir, then run "
+              "`nandaka models scan`")
 
 
 def cmd_doctor(args) -> None:
     cfg = get_config(args.config)
     cfg.ensure_dirs()
-    from .models.server import find_server_binary
+    from .models.server import find_server_binary, probe_ollama
     checks = {
         "profile": machine_profile(),
         "python": sys.version.split()[0],
@@ -131,10 +143,18 @@ def cmd_doctor(args) -> None:
                       "exists": Path(cfg.model_dir).exists(),
                       "gguf_count": len(list(Path(cfg.model_dir).glob("**/*.gguf")))
                       if Path(cfg.model_dir).exists() else 0},
-        "llama_server": find_server_binary(cfg) or "NOT FOUND — see install notes",
+        "llama_server": ("not used (backend = ollama)" if cfg.using_ollama()
+                         else find_server_binary(cfg)
+                         or "NOT FOUND — see install notes"),
         "ram_budget_mb": cfg.ram_budget_mb,
         "n_ctx": cfg.effective_n_ctx(),
         "backend": cfg.backend,
+        # Probed only when selected, so doctor stays offline by default.
+        "ollama": {
+            "host": cfg.ollama_host,
+            "in_use": cfg.using_ollama(),
+            **(probe_ollama(cfg.ollama_host) if cfg.using_ollama() else {}),
+        },
         "cloud": {
             "enabled": cfg.cloud_enabled,
             "provider": cfg.cloud_provider,
@@ -157,9 +177,14 @@ def cmd_doctor(args) -> None:
         "telugu_capable": bool(font and font.has("క")),
         "latin_fallback": "Helvetica (built in; always available)",
     }
-    checks["offline_ready"] = bool(
-        find_server_binary(cfg)
-        and next(Path(cfg.model_dir).glob("*.gguf"), None))
+    if cfg.using_ollama():
+        # With Ollama the endpoint holds the weights, so readiness is the
+        # endpoint answering — no local binary or GGUF is required.
+        checks["offline_ready"] = bool(checks["ollama"].get("reachable"))
+    else:
+        checks["offline_ready"] = bool(
+            find_server_binary(cfg)
+            and next(Path(cfg.model_dir).glob("*.gguf"), None))
     _dump(checks, True)
 
 
@@ -379,7 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="task")
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--model", help="path or name of a GGUF file")
+        p.add_argument("--model",
+                       help="GGUF path, or an Ollama tag when backend=ollama")
         p.add_argument("--cloud", action="store_true",
                        help="explicitly allow cloud fallback (NVIDIA/OpenRouter)")
         p.add_argument("--force", action="store_true",

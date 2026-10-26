@@ -65,6 +65,31 @@ def find_server_binary(cfg: Config) -> str | None:
     return None
 
 
+def probe_ollama(host: str, timeout: float = 2.5) -> dict:
+    """FR-GGUF-13: is the Ollama endpoint answering? Best-effort, never fatal.
+
+    Termux ships no Ollama package, so ``host`` is usually a machine on the
+    LAN or a proot-distro instance — it may simply not be up. Reports what it
+    finds (including the tags Ollama holds) and degrades instead of raising.
+    """
+    url = str(host).rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            body = resp.read(256 << 10)
+    except Exception as exc:                      # unreachable, refused, DNS…
+        return {"host": host, "reachable": False,
+                "reason": f"{type(exc).__name__}: {exc}"}
+    models: list[str] = []
+    try:
+        payload = json.loads(body.decode("utf-8", "replace"))
+        raw = payload.get("models", []) if isinstance(payload, dict) else []
+        models = [str(m.get("name", "")) for m in raw if isinstance(m, dict)]
+        models = [m for m in models if m]
+    except (ValueError, AttributeError):
+        pass                                      # not JSON: still reachable
+    return {"host": host, "reachable": True, "models": models}
+
+
 def _free_port(preferred: int) -> int:
     for port in (preferred, preferred + 1, preferred + 2, 0):
         try:
@@ -222,7 +247,7 @@ class ModelManager:
     # ---------------- local client ---------------- #
 
     def client(self, model_ref: str | None = None, n_ctx: int | None = None) -> ChatClient:
-        if self.cfg.backend == "ollama":
+        if self.cfg.using_ollama():
             # FR-GGUF-13: Ollama exposes the same OpenAI dialect on :11434
             entry_path = self.registry.resolve(model_ref)
             tag = Path(entry_path).stem if entry_path else (model_ref or "")

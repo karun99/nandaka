@@ -173,6 +173,10 @@ class Config:
             "NANDAKA_N_CTX": ("n_ctx", int),
             "NANDAKA_LLAMA_SERVER": ("llama_server_bin", str),
             "NANDAKA_BACKEND": ("backend", str),
+            # Termux has no Ollama package, so the endpoint is usually a LAN
+            # host or a proot-distro instance — configurable without editing
+            # config.toml (FR-GGUF-13).
+            "NANDAKA_OLLAMA_HOST": ("ollama_host", str),
             "NVIDIA_API_KEY": ("nvidia_api_key", str),
             "OPENROUTER_API_KEY": ("openrouter_api_key", str),
             "NANDAKA_CLOUD": ("cloud_enabled", lambda v: v.lower() in ("1", "true", "yes", "on")),
@@ -218,6 +222,15 @@ class Config:
             return 1024
         # ~1 MB of KV cache per 64 tokens per B of model, rough ceiling:
         return max(1024, min(8192, (self.ram_budget_mb // 1024) * 2048))
+
+    def using_ollama(self) -> bool:
+        """FR-GGUF-13: is the Ollama backend selected?
+
+        Termux ships no Ollama package, so this is usually a server on the LAN
+        or an instance inside proot-distro; every call site should treat the
+        endpoint as optional and degrade when it is absent.
+        """
+        return str(self.backend).strip().lower() == "ollama"
 
     def cloud_credentials(self) -> tuple[str, str]:
         """Return (base_url, api_key) for the selected provider, or ("", "")."""

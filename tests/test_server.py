@@ -738,3 +738,113 @@ def test_swap_returns_elapsed_time(nandaka_home, stub, monkeypatch):
     assert elapsed >= 0.0
     assert isinstance(elapsed, float)
     assert time.time() - t0 < 10                # bounded, never hangs
+
+
+# --------------------------------------------------------------------------- #
+# FR-GGUF-13: Ollama endpoint probe (Termux ships no Ollama package, so the
+# endpoint is usually a LAN host — it may simply not be up)
+# --------------------------------------------------------------------------- #
+
+
+class _OllamaStub:
+    """Minimal Ollama API: serves /api/tags with a chosen body."""
+
+    def __init__(self, body: bytes, content_type: str = "application/json"):
+        self.body = body
+        self.content_type = content_type
+        self.paths: list[str] = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       daemon=True)
+        self.thread.start()
+
+    @property
+    def host(self) -> str:
+        h, port = self.server.server_address
+        return f"http://{h}:{port}"
+
+    def _handler(self):
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                stub.paths.append(self.path)
+                if self.path == "/api/tags":
+                    self.send_response(200)
+                    body = stub.body
+                else:
+                    self.send_response(404)
+                    body = b"{}"
+                self.send_header("Content-Type", stub.content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        return Handler
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+def test_probe_ollama_reports_tags(nandaka_home):
+    """A live endpoint yields its model list (what the phone can run)."""
+    from nandaka.models.server import probe_ollama
+    payload = json.dumps({"models": [
+        {"name": "llama3.2:1b", "size": 1},
+        {"name": "qwen2.5:3b", "size": 2},
+    ]}).encode()
+    os_stub = _OllamaStub(payload)
+    try:
+        out = probe_ollama(os_stub.host)
+    finally:
+        os_stub.close()
+    assert out["reachable"] is True
+    assert out["host"] == os_stub.host
+    assert out["models"] == ["llama3.2:1b", "qwen2.5:3b"]
+    assert os_stub.paths == ["/api/tags"]
+
+
+def test_probe_ollama_host_with_trailing_slash(nandaka_home):
+    """A hand-typed host ending in / must not produce //api/tags."""
+    from nandaka.models.server import probe_ollama
+    os_stub = _OllamaStub(b'{"models": []}')
+    try:
+        out = probe_ollama(os_stub.host + "/")
+    finally:
+        os_stub.close()
+    assert out["reachable"] is True
+    assert os_stub.paths == ["/api/tags"]
+
+
+def test_probe_ollama_unreachable_degrades(nandaka_home):
+    """Refused connection must report, never raise (FR-IN-06, Termux case)."""
+    from nandaka.models.server import probe_ollama
+    out = probe_ollama("http://127.0.0.1:1", timeout=1.0)
+    assert out["reachable"] is False
+    assert out["reason"], "a dead endpoint must say why"
+    assert out["host"] == "http://127.0.0.1:1"
+
+
+def test_probe_ollama_reachable_but_not_json(nandaka_home):
+    """Reachability is separate from parsing: a weird body still counts up."""
+    from nandaka.models.server import probe_ollama
+    os_stub = _OllamaStub(b"<html>not an api</html>", "text/html")
+    try:
+        out = probe_ollama(os_stub.host)
+    finally:
+        os_stub.close()
+    assert out["reachable"] is True
+    assert out["models"] == [], "no tags disclosed from an unreadable body"
+
+
+def test_probe_ollama_timeout_is_bounded(nandaka_home):
+    """The probe must return quickly — doctor cannot hang on a dead host."""
+    from nandaka.models.server import probe_ollama
+    t0 = time.time()
+    probe_ollama("http://10.255.255.1", timeout=1.0)   # non-routable address
+    assert time.time() - t0 < 10

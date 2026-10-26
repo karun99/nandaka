@@ -125,7 +125,7 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | FR-GGUF-09 | Capability probe (factual / reasoning / instruction) with per-item results | `test_cli models probe`, `test_server` |
 | FR-GGUF-11 | Capability gate: `ok / partial / basic / off` per feature × tier; `off` refuses unless `--force`; `basic` forces human review | `test_registry` |
 | FR-GGUF-12 | Integrity verification (magic, header, tensors, SHA-256) | `test_registry` |
-| FR-GGUF-13 | Ollama backend via the same OpenAI dialect on `:11434` | `test_config`, `test_server` |
+| FR-GGUF-13 | Ollama backend via the same OpenAI dialect on `:11434` | `test_config`, `test_server`, `test_cli` |
 | FR-GGUF-14 | Registry persists at `registry.json` (mode 0600) and drops stale entries | `test_registry` |
 
 **Feature matrix (§3.3.1.1):** `short_summary`, `short_draft`, `long_draft`,
@@ -317,7 +317,7 @@ No daemon, no server component: the workflow is a pipeline executed per batch.
 | Integration | `tests/test_pipeline`, `test_report`, `test_cloud`, `test_cli`, `test_server` | local `http.server` stubs for cloud, llama-server and file downloads; fake backend for the pipeline |
 | System / CI | `.github/workflows/ci.yml` | py3.10–3.13 + ARM runner, wheel build, secret scan |
 
-Suite status: **179 passed**, fully offline (no network, no model weights).
+Suite status: **191 passed**, fully offline (no network, no model weights).
 
 ---
 

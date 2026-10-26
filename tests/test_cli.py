@@ -84,13 +84,94 @@ def test_doctor_reports_environment(nandaka_home, capsys):
     assert code == 0
     report = as_json(text)
     for key in ("profile", "python", "nandaka_dir", "model_dir",
-                "llama_server", "cloud", "optional_deps", "offline_ready"):
+                "llama_server", "cloud", "optional_deps", "offline_ready",
+                "ollama"):
         assert key in report, f"doctor missing '{key}'"
     assert report["cloud"]["enabled"] is False
     assert report["cloud"]["nvidia_key"] == "missing"
     assert report["nandaka_dir"]["writable"] is True
     # never leak secrets (§3.6)
     assert "api_key" not in json.dumps(report).lower() or "***" in text
+    # default backend: the endpoint is disclosed but not contacted (offline)
+    assert report["ollama"]["in_use"] is False
+    assert report["ollama"]["host"] == "http://127.0.0.1:11434"
+
+
+def _ollama_stub(payload: dict):
+    """Local Ollama /api/tags endpoint for doctor (FR-GGUF-13)."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    body = json.dumps(payload).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def test_doctor_probes_ollama_when_selected(nandaka_home, capsys, monkeypatch):
+    """Selected backend -> endpoint is probed and readiness follows it."""
+    srv, host = _ollama_stub({"models": [{"name": "llama3.2:1b"}]})
+    try:
+        monkeypatch.setenv("NANDAKA_BACKEND", "ollama")
+        monkeypatch.setenv("NANDAKA_OLLAMA_HOST", host)
+        from nandaka.config import get_config
+        get_config(reload=True)
+        code, text = run_cli(capsys, "doctor")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert code == 0
+    report = as_json(text)
+    assert report["ollama"]["in_use"] is True
+    assert report["ollama"]["reachable"] is True
+    assert report["ollama"]["models"] == ["llama3.2:1b"]
+    # no local binary is needed when Ollama holds the weights
+    assert report["llama_server"] == "not used (backend = ollama)"
+    assert report["offline_ready"] is True
+
+
+def test_doctor_ollama_down_is_not_ready(nandaka_home, capsys, monkeypatch):
+    """A dead LAN endpoint degrades: reported, exit 0, never a traceback."""
+    monkeypatch.setenv("NANDAKA_BACKEND", "ollama")
+    monkeypatch.setenv("NANDAKA_OLLAMA_HOST", "http://127.0.0.1:1")
+    from nandaka.config import get_config
+    get_config(reload=True)
+    code, text = run_cli(capsys, "doctor")
+    assert code == 0
+    report = as_json(text)
+    assert report["ollama"]["reachable"] is False
+    assert report["ollama"]["reason"]
+    assert report["offline_ready"] is False
+
+
+def test_init_writes_ollama_config(nandaka_home, capsys, monkeypatch):
+    """`init` bakes the env-selected backend into config.toml (Termux flow)."""
+    monkeypatch.setenv("NANDAKA_BACKEND", "ollama")
+    monkeypatch.setenv("NANDAKA_OLLAMA_HOST", "http://192.168.1.24:11434")
+    from nandaka.config import get_config
+    get_config(reload=True)
+    code, text = run_cli(capsys, "init")
+    assert code == 0
+    content = (Path(nandaka_home.nandaka_dir) / "config.toml").read_text(
+        encoding="utf-8")
+    assert 'backend = "ollama"' in content
+    assert 'ollama_host = "http://192.168.1.24:11434"' in content
+    # no confusing "install llama.cpp" advice when Ollama is the backend,
+    # and no advice to drop a .gguf either (this backend uses tags)
+    assert "llama-server not on PATH" not in text
+    assert "drop a .gguf" not in text
+    assert "ollama @ http://192.168.1.24:11434" in text
 
 
 def test_config_show_masks_secrets(nandaka_home, capsys, monkeypatch):

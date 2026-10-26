@@ -59,9 +59,19 @@ for extra in pdf xlsx; do
   fi
 done
 
+# ---------------------------------------------------------------- backend
+# "llama_cpp" (default, fully on-device) or "ollama" (FR-GGUF-13).
+# Select with:  NANDAKA_BACKEND=ollama bash scripts/install-termux.sh
+BACKEND="${NANDAKA_BACKEND:-llama_cpp}"
+case "$BACKEND" in
+  llama_cpp|ollama) ;;
+  *) fail "unknown backend '$BACKEND' (use llama_cpp or ollama)" ;;
+esac
+note "model backend: $BACKEND"
+
 # ---------------------------------------------------------------- llama.cpp
 # pkg name differs across Termux builds; try both, never abort on failure.
-if ! command -v llama-server >/dev/null 2>&1; then
+if [ "$BACKEND" = "llama_cpp" ] && ! command -v llama-server >/dev/null 2>&1; then
   note "looking for llama-server…"
   if pkg install -y llama.cpp >/dev/null 2>&1 \
      || pkg install -y llama-cpp >/dev/null 2>&1; then
@@ -72,6 +82,33 @@ if ! command -v llama-server >/dev/null 2>&1; then
     note "  2) build from source: https://github.com/ggml-org/llama.cpp"
     note "  3) export NANDAKA_LLAMA_SERVER=/path/to/llama-server"
   fi
+fi
+
+# ---------------------------------------------------------------- ollama
+# Termux has no official Ollama package, so the endpoint has to live
+# somewhere else — a PC on the same LAN, or an instance inside proot-distro.
+# NANDAKA just points at it; nothing here downloads an Ollama binary.
+if [ "$BACKEND" = "ollama" ]; then
+  # Accept either spelling of the host and pin it for this install.
+  if [ -z "${NANDAKA_OLLAMA_HOST:-}" ] && [ -n "${OLLAMA_HOST:-}" ]; then
+    NANDAKA_OLLAMA_HOST="$OLLAMA_HOST"
+  fi
+  export NANDAKA_BACKEND=ollama
+  export NANDAKA_OLLAMA_HOST="${NANDAKA_OLLAMA_HOST:-http://127.0.0.1:11434}"
+  note "ollama endpoint: $NANDAKA_OLLAMA_HOST"
+  if [ "$NANDAKA_OLLAMA_HOST" = "http://127.0.0.1:11434" ] \
+     && command -v curl >/dev/null 2>&1 \
+     && ! curl -fsS --max-time 2 "$NANDAKA_OLLAMA_HOST/api/tags" >/dev/null 2>&1; then
+    note "no Ollama answering on this phone. Termux ships no Ollama package;"
+    note "  run one elsewhere, then point Nandaka at it:"
+    note "    a) PC on the same LAN:  ollama serve  (binds 0.0.0.0:11434), then"
+    note "       export NANDAKA_OLLAMA_HOST=http://<pc-ip>:11434"
+    note "    b) inside proot-distro: pkg install proot-distro &&"
+    note "       proot-distro install ubuntu, then install Ollama there"
+  fi
+  note "persist in ~/.bashrc:"
+  note "  export NANDAKA_BACKEND=ollama"
+  note "  export NANDAKA_OLLAMA_HOST=\"$NANDAKA_OLLAMA_HOST\""
 fi
 
 # ---------------------------------------------------------------- data dir
@@ -94,6 +131,13 @@ echo
 nandaka doctor | sed -n '1,60p'
 
 note "done. next steps:"
-note "  1) drop a .gguf into \$NANDAKA_DIR/models"
-note "  2) nandaka models scan"
-note "  3) nandaka mcq --topic 'Constitution' --count 10 --offline"
+if [ "$BACKEND" = "ollama" ]; then
+  note "  1) pull a model on the ollama host:  ollama pull llama3.2:1b"
+  note "  2) nandaka doctor            # shows 'ollama' reachable + its tags"
+  note "  3) nandaka mcq --model llama3.2:1b --topic 'Constitution' --count 10"
+  note "     (--model takes the Ollama tag; no .gguf needed on the phone)"
+else
+  note "  1) drop a .gguf into \$NANDAKA_DIR/models"
+  note "  2) nandaka models scan"
+  note "  3) nandaka mcq --topic 'Constitution' --count 10 --offline"
+fi

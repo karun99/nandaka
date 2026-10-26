@@ -51,6 +51,53 @@ def test_cloud_off_by_default_and_gated(nandaka_home):
     assert "openrouter" in base
 
 
+def test_ollama_backend_via_env(nandaka_home, monkeypatch):
+    """FR-GGUF-13: on Termux the backend and its host are env-configurable."""
+    monkeypatch.setenv("NANDAKA_BACKEND", "ollama")
+    monkeypatch.setenv("NANDAKA_OLLAMA_HOST", "http://192.168.1.24:11434")
+    cfg = Config.load()
+    assert cfg.backend == "ollama"
+    assert cfg.using_ollama() is True
+    assert cfg.ollama_host == "http://192.168.1.24:11434"
+
+
+def test_ollama_is_opt_in(nandaka_home):
+    """Default stays llama_cpp: selecting Ollama is never implied."""
+    cfg = Config.load()
+    assert cfg.backend == "llama_cpp"
+    assert cfg.using_ollama() is False
+    assert cfg.ollama_host == "http://127.0.0.1:11434"
+
+
+def test_using_ollama_tolerates_spelling(nandaka_home):
+    """A hand-edited config.toml saying 'Ollama ' must still select Ollama."""
+    cfg = Config.load()
+    for spelling in ("ollama", "OLLAMA", " Ollama "):
+        cfg.backend = spelling
+        assert cfg.using_ollama() is True, spelling
+    for spelling in ("llama_cpp", "", "ollamaish"):
+        cfg.backend = spelling
+        assert cfg.using_ollama() is False, spelling
+
+
+def test_ollama_host_from_config_file(nandaka_home, tmp_path):
+    """config.toml is the other supported route, and env still wins over it."""
+    import os
+    p = tmp_path / "c.toml"
+    p.write_text('backend = "ollama"\nollama_host = "http://10.0.0.5:11434"\n',
+                 encoding="utf-8")
+    cfg = Config.load(p)
+    assert cfg.using_ollama() is True
+    assert cfg.ollama_host == "http://10.0.0.5:11434"
+
+    os.environ["NANDAKA_OLLAMA_HOST"] = "http://from-env:11434"
+    try:
+        cfg2 = Config.load(p)
+        assert cfg2.ollama_host == "http://from-env:11434"   # env precedence
+    finally:
+        del os.environ["NANDAKA_OLLAMA_HOST"]
+
+
 def test_config_file_read(nandaka_home, tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('cloud_enabled = true\ncloud_provider = "openrouter"\n'
